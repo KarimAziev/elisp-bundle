@@ -191,7 +191,8 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
     (setq args `("-Q"
                  "--batch"
                  ,@(mapcan (lambda (path) (list "-L" path))
-                           (append (list "./")))
+                           (append (list "./")
+                                   load-path))
                  "--eval" "(batch-byte-compile)"
                  ,temp-file))
     (with-temp-buffer
