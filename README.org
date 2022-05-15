@@ -1,0 +1,30 @@
+* elisp-bundle
+
+** Installation
+
+*** Manually
+
+Download repository and it to your load path in your init file:
+
+#+begin_src elisp :eval no
+
+(add-to-list 'load-path "/path/to/elisp-bundle/")
+
+(require 'elisp-bundle)
+
+#+end_src
+
+*** With use-package and straight
+
+#+begin_src elisp :eval no
+
+(use-package elisp-bundle
+  :straight (:repo "KarimAziev/elisp-bundle" :type git :host github)
+  :commands (elisp-bundle-include-undefined))
+
+#+end_src
+
+** Commands
+
++ ~elisp-bundle-include-undefined~
+Insert defintions of undefined functions and variables in current buffer.
