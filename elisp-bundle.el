@@ -147,10 +147,9 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
 (defun elisp-bundle-find-place-to-insert ()
   "Jump to place where to insert new definition."
   (goto-char (point-min))
-  (elisp-bundle-forward-sexp 1)
-  (backward-sexp 1)
   (let ((found))
     (while (progn
+             (elisp-bundle-forward-sexp 1)
              (save-excursion
                (when-let ((sexp (sexp-at-point)))
                  (and
