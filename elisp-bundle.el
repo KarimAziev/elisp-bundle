@@ -220,6 +220,8 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
   (let ((buff (current-buffer))
         (curr-file)
         (searched-names)
+        (disabled-files)
+        (enabled-files)
         (names))
     (setq curr-file (buffer-file-name buff))
     (while (setq names
@@ -245,16 +247,16 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
                           (if (when-let ((file (when buffer-file-name
                                                  (expand-file-name
                                                   buffer-file-name))))
-                                (or
-                                 (equal (elisp-bundle-file-parent curr-file)
-                                        (elisp-bundle-file-parent file))
-                                 (and
-                                  (string-prefix-p user-emacs-directory file)
-                                  (not (when-let
-                                           ((straight-dir
-                                             (when (fboundp 'straight--dir)
-                                               (straight--dir))))
-                                         (string-prefix-p straight-dir file))))))
+                                (and
+                                 (null (member file disabled-files))
+                                 (or
+                                  (equal (elisp-bundle-file-parent curr-file)
+                                         (elisp-bundle-file-parent file))
+                                  (member file enabled-files)
+                                  (if (yes-or-no-p (format "Include definitions from %s?"  file))
+                                      (push file enabled-files)
+                                    (push file disabled-files)
+                                    nil))))
                               (progn (goto-char (cdr cell))
                                      (when-let ((bounds
                                                  (bounds-of-thing-at-point
@@ -262,7 +264,7 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
                                        (buffer-substring-no-properties
                                         (car bounds) (cdr bounds))))
                             (goto-char (point-max))
-                            (when (re-search-backward
+                            (when (elisp-bundle-re-search-backward
                                    "[(]provide[\s\t\n\r\f]+'\\([^\s\t\n\r\f)]+\\)"
                                    nil t 1)
                               (let ((lib
