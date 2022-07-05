@@ -144,31 +144,31 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
        (unless noerror
          (signal (car err) (cdr err)))))))
 
+(defun elisp-bundle-sexp-to-skip ()
+  "Return non nil if sexp should be skipped."
+  (when-let ((sexp (sexp-at-point)))
+    (and
+     (listp sexp)
+     (memq (car sexp)
+           '(eval-and-compile
+              require
+              eval-when-compile
+              declare-function)))))
+
 (defun elisp-bundle-find-place-to-insert ()
   "Jump to place where to insert new definition."
   (goto-char (point-min))
-  (let ((found))
-    (while (progn
-             (elisp-bundle-forward-sexp 1)
-             (save-excursion
-               (when-let ((sexp (sexp-at-point)))
-                 (and
-                  (listp sexp)
-                  (or (and (= 2 (length sexp))
-                           (eq (car sexp) 'defvar))
-                      (not (null
-                            (memq (car sexp)
-                                  '(eval-and-compile
-                                     eval-when-compile
-                                     defcustom
-                                     defface
-                                     declare-function)))))))))
-      (setq found t))
-    (when found
-      (progn (elisp-bundle-backward-list)
-             (when (elisp-bundle-re-search-backward
-                    "[)]" nil t 1)
-               (forward-char 1))))))
+  (elisp-bundle-forward-sexp 1)
+  (elisp-bundle-backward-list)
+  (let ((prev-pos))
+    (while (and (or (null prev-pos)
+                    (< prev-pos (point)))
+                (elisp-bundle-sexp-to-skip))
+      (setq prev-pos (progn
+                       (elisp-bundle-forward-sexp 2)
+                       (elisp-bundle-backward-list)))))
+  (when (elisp-bundle-sexp-to-skip)
+    (elisp-bundle-forward-sexp 2)))
 
 (defun elisp-bundle-extract-quoted-text (text)
 	"Extract quoted name from TEXT."
