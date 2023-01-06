@@ -204,7 +204,8 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
 
 (defun elisp-bundle-extract-undefs ()
   "Return cons of undefined functions and variables names in current buffer."
-  (let ((lines (split-string (cdr (elisp-bundle-compile-current-buffer)) "\n"))
+  (let ((lines (split-string (cdr (elisp-bundle-compile-current-buffer)) "\n"
+                             t))
         (line)
         (vars)
         (fns))
@@ -260,7 +261,7 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
                   ""
                 "\n")
               definition
-              (if (looking-at "\n\n")
+              (if (looking-at "\n")
                   ""
                 "\n"))))
     (insert str)))
