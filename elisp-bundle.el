@@ -181,11 +181,56 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
         (push (match-string-no-properties 1) names))
       names)))
 
+(defun elisp-bundle-byte-compile-buffer (&optional load)
+  "Byte compile the current buffer, but don't write a file.
+If LOAD is non-nil, load byte-compiled data.  When called
+interactively, this is the prefix argument."
+  (interactive "P")
+  (let ((bfn buffer-file-name)
+        file elc)
+    (require 'bytecomp)
+    (unwind-protect
+        (progn
+          (setq file (make-temp-file "compile" nil ".el")
+                elc (funcall byte-compile-dest-file-function file))
+          (write-region (point-min) (point-max) file nil 'silent)
+          (let ((set-message-function
+                 (lambda (message)
+                   (when (string-match-p "\\`Wrote " message)
+                     'ignore)))
+                (byte-compile-log-warning-function
+                 (lambda (string position &optional fill level)
+                   (if bfn
+                       ;; Massage the warnings to that they point to
+                       ;; this file, not the one in /tmp.
+                       (let ((byte-compile-current-file bfn)
+                             (byte-compile-root-dir (file-name-directory bfn)))
+                         (byte-compile--log-warning-for-byte-compile
+                          string position fill level))
+                     ;; We don't have a file name, so the warnings
+                     ;; will point to a file that doesn't exist.  This
+                     ;; should be fixed in some way.
+                     (byte-compile--log-warning-for-byte-compile
+                      string position fill level)))))
+            (byte-compile-file file))
+          (when (and bfn (get-buffer "*Compile-Log*"))
+            (with-current-buffer "*Compile-Log*"
+              (setq default-directory (file-name-directory bfn))))
+          (if load
+              (load elc)
+            (message "Byte-compiled the current buffer")))
+      (when file
+        (when (file-exists-p file)
+          (delete-file file))
+        (when (file-exists-p elc)
+          (delete-file elc))))))
+
 (defun elisp-bundle-compile-current-buffer ()
   "Batch compile current buffer."
-  (let ((temp-file (make-temp-file "elisp-bundle-flymake-byte-compile"))
-        (command (expand-file-name invocation-name invocation-directory))
-        (args))
+  (let* ((temp-file (make-temp-file "elisp-bundle-flymake-byte-compile"))
+         (temp-file-re (regexp-quote temp-file))
+         (command (expand-file-name invocation-name invocation-directory))
+         (args))
     (save-restriction
       (widen)
       (write-region (point-min)
@@ -199,13 +244,15 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
                  "--eval" "(batch-byte-compile)"
                  ,temp-file))
     (with-temp-buffer
-      (cons (= 0 (apply #'call-process command nil t nil (remq nil args)))
-            (string-trim (buffer-string))))))
+      (let ((status (apply #'call-process command nil t nil (remq nil args))))
+        (when (zerop status)
+          (mapcar
+           (apply-partially 'replace-regexp-in-string temp-file-re "")
+           (split-string (string-trim (buffer-string)) "\n" t)))))))
 
 (defun elisp-bundle-extract-undefs ()
   "Return cons of undefined functions and variables names in current buffer."
-  (let ((lines (split-string (cdr (elisp-bundle-compile-current-buffer)) "\n"
-                             t))
+  (let ((lines (elisp-bundle-compile-current-buffer))
         (line)
         (vars)
         (fns))
@@ -216,8 +263,10 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
             ((string-match-p "reference to free variable" line)
              (when-let ((names (elisp-bundle-extract-quoted-text line)))
                (setq vars (nconc vars names))))))
-    (cons (seq-uniq fns)
-          (seq-uniq vars))))
+    (when (or fns
+              vars)
+      (cons (seq-uniq fns)
+            (seq-uniq vars)))))
 
 (defun elisp-bundle-copy-sexp (position)
   "Copy SEXP at POSITION."
@@ -286,7 +335,8 @@ Other available strategies - insert declare-functions form or require."
                                          name))
                                   (cell (elisp-bundle-find-definition sym)))
                         (with-current-buffer (car cell)
-                          (let* ((lib (elisp-bundle--provided-feature))
+                          (let* ((lib (save-match-data
+                                        (elisp-bundle--provided-feature)))
                                  (strategy
                                   (or
                                    (cdr (assoc lib libs-strategies))
