@@ -22,6 +22,7 @@
 ;;
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 
 ;; This file configures operations with bundle
@@ -33,6 +34,166 @@
 ;;    Other available strategies - insert declare-functions form or require.
 
 ;;; Code:
+
+
+(defvar elisp-bundle-overlay-cleanup-hooks-fns
+  '((post-command-hook . t)
+    (before-change-functions . t)
+    (window-buffer-change-functions . nil)
+    (window-selection-change-functions . nil)))
+
+(defvar elisp-bundle-overlay nil
+  "Overlay variable for `elisp-bundle-overlay-show'.")
+
+(defun elisp-bundle-overlay-unset-and-remove (var-symbol)
+  "Remove overlay from VAR-SYMBOL value."
+  (when (overlayp (symbol-value var-symbol))
+    (delete-overlay (symbol-value var-symbol)))
+  (set var-symbol nil))
+
+(defun elisp-bundle-make-overlay (start end &optional buffer front-advance
+                                        rear-advance &rest props)
+  "Create a new overlay with range BEG to END in BUFFER and return it.
+If omitted, BUFFER defaults to the current buffer.
+START and END may be integers or markers.
+The fourth arg FRONT-ADVANCE, if non-nil, makes the marker
+for the front of the overlay advance when text is inserted there
+\(which means the text *is not* included in the overlay).
+The fifth arg REAR-ADVANCE, if non-nil, makes the marker
+for the rear of the overlay advance when text is inserted there
+\(which means the text *is* included in the overlay).
+PROPS is a plist to put on overlay."
+  (let ((overlay (make-overlay start end buffer front-advance
+                               rear-advance)))
+    (dotimes (idx (length props))
+      (when (eq (logand idx 1) 0)
+        (let* ((prop-name (nth idx props))
+               (val (plist-get props prop-name)))
+          (overlay-put overlay prop-name val))))
+    overlay))
+
+(defun elisp-bundle-set-overlay (var-symbol start end &optional buffer
+                                            front-advance rear-advance &rest
+                                            props)
+  "Create a new overlay and set value of VAR-SYMBOL to it.
+If omitted, BUFFER defaults to the current buffer.
+START and END may be integers or markers.
+The fourth arg FRONT-ADVANCE, if non-nil, makes the marker
+for the front of the overlay advance when text is inserted there
+\(which means the text *is not* included in the overlay).
+The fifth arg REAR-ADVANCE, if non-nil, makes the marker
+for the rear of the overlay advance when text is inserted there
+\(which means the text *is* included in the overlay).
+PROPS is a plist to put on overlay."
+  (elisp-bundle-overlay-unset-and-remove var-symbol)
+  (set var-symbol (apply #'elisp-bundle-make-overlay
+                         (append (list start end
+                                       buffer front-advance
+                                       rear-advance)
+                                 props))))
+
+(defun elisp-bundle-overlay-cleanup (&rest _args)
+  "Remove overlay defined in `elisp-bundle-overlay'."
+  (elisp-bundle-overlay-unset-and-remove 'elisp-bundle-overlay)
+  (dolist (cell elisp-bundle-overlay-cleanup-hooks-fns)
+    (remove-hook (car cell)
+                 'elisp-bundle-overlay-cleanup (cdr cell))))
+
+(defun elisp-bundle-overlay-add-hooks (ov)
+  "Add cleanup hooks to overlay OV."
+  (when-let ((buff (when (overlayp ov)
+                     (overlay-buffer ov))))
+    (when (buffer-live-p buff)
+      (with-current-buffer (overlay-buffer ov)
+        (dolist (cell elisp-bundle-overlay-cleanup-hooks-fns)
+          (add-hook
+           (car cell)
+           #'elisp-bundle-overlay-cleanup
+           nil (cdr cell)))))))
+
+(defun elisp-bundle-overlay-higlight (start end &optional face)
+  "Temporarily highlight region from START to END with FACE.
+Default value of TIMEOUT is 0 seconds."
+  (elisp-bundle-overlay-cleanup)
+  (elisp-bundle-set-overlay 'elisp-bundle-overlay
+                            start end nil nil nil 'face
+                            (or face 'success))
+  (run-with-timer 0 nil
+                  #'elisp-bundle-overlay-add-hooks
+                  elisp-bundle-overlay))
+
+(defun elisp-bundle--unquote (exp)
+  "Return EXP unquoted."
+  (declare (pure t)
+           (side-effect-free t))
+  (while (memq (car-safe exp) '(quote function))
+    (setq exp (cadr exp)))
+  exp)
+
+(defun elisp-bundle--parse-require ()
+  "Parse list at point and return alist of form (symbol-name args doc deftype).
+E.g. (\"elisp-bundle--parse-list-at-point\" (arg) \"Doc string\" defun)"
+  (when-let ((sexp (unless (or (nth 4 (syntax-ppss (point)))
+                               (nth 3 (syntax-ppss (point))))
+                     (sexp-at-point))))
+    (when (listp sexp)
+      (elisp-bundle--format-sexp-to-require sexp))))
+
+(defmacro elisp-bundle--with-temp-lisp-buffer (&rest body)
+  "Execute BODY in temp buffer with Emacs Lisp mode without hooks."
+  (declare (indent 2)
+           (debug t))
+  `(with-temp-buffer
+     (erase-buffer)
+     (let (emacs-lisp-mode-hook)
+       (emacs-lisp-mode))
+     (progn
+       ,@body)))
+
+(defun elisp-bundle--format-sexp-to-require (sexp)
+  "Return string with package name if SEXP is valid require call.
+If package is optional, also add suffix (optional)."
+  (pcase sexp
+    (`(require ,(and name
+                     (guard (listp name))
+                     (guard (eq (car-safe name) 'quote))))
+     (cons (elisp-bundle--unquote name) nil))
+    (`(require ,(and name
+                     (guard (listp name))
+                     (guard (eq (car-safe name) 'quote)))
+               ,_)
+     (cons (elisp-bundle--unquote name) nil))
+    (`(require ,(and name
+                     (guard (listp name))
+                     (guard (eq (car-safe name) 'quote)))
+               ,_
+               ,(and optional (guard (not (eq optional nil)))))
+     (cons (elisp-bundle--unquote name) t))))
+
+(defun elisp-bundle--backward-list (&optional n)
+  "Move backward across N balanced group of parentheses.
+Return new position if changed, nil otherwise."
+  (let ((pos (point))
+        (end))
+    (setq end (ignore-errors
+                (backward-list (or n 1))
+                (point)))
+    (unless (equal pos end)
+      end)))
+
+(defun elisp-bundle-confirm-replace (beg end &optional replacement)
+  "Make overlay between BEG and END and show REPLACEMENT at the END."
+  (let ((cover-ov (make-overlay beg end)))
+    (unwind-protect
+        (progn
+          (overlay-put cover-ov 'face 'error)
+          (when (and replacement (not (string-empty-p replacement)))
+            (overlay-put cover-ov 'after-string
+                         (propertize (concat "\s"
+                                             replacement)
+                                     'face 'success)))
+          (yes-or-no-p (if replacement "Replace?" "Remove?")))
+      (delete-overlay cover-ov))))
 
 (defun elisp-bundle-move-with (fn &optional n)
   "Move by calling FN N times.
@@ -123,6 +284,11 @@ Return new position if changed, nil otherwise."
 Return new position if changed, nil otherwise."
   (elisp-bundle-move-with 'backward-list n))
 
+(defun elisp-bundle-backward-up-list (&optional n)
+  "Move backward across N balanced group of parentheses.
+Return new position if changed, nil otherwise."
+  (elisp-bundle-move-with 'backward-up-list n))
+
 (defun elisp-bundle-re-search-backward (regexp &optional bound noerror count)
   "Search backward from point for REGEXP ignoring elisp comments and strings.
 Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
@@ -174,13 +340,12 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
 
 (defun elisp-bundle-extract-quoted-text (text)
   "Extract quoted name from TEXT."
-  (let ((names))
-    (with-temp-buffer
-      (insert text)
-      (while (re-search-backward "‘\\([^’]+\\)" nil t 1)
-        (push (match-string-no-properties 1) names))
-      names)))
+  (with-temp-buffer
+    (insert text)
+    (when (re-search-backward "‘\\([^’]+\\)" nil t 1)
+      (match-string-no-properties 1))))
 
+;;;###autoload
 (defun elisp-bundle-byte-compile-buffer (&optional load)
   "Byte compile the current buffer, but don't write a file.
 If LOAD is non-nil, load byte-compiled data.  When called
@@ -193,7 +358,8 @@ interactively, this is the prefix argument."
         (progn
           (setq file (make-temp-file "compile" nil ".el")
                 elc (funcall byte-compile-dest-file-function file))
-          (write-region (point-min) (point-max) file nil 'silent)
+          (write-region (point-min)
+                        (point-max) file nil 'silent)
           (let ((set-message-function
                  (lambda (message)
                    (when (string-match-p "\\`Wrote " message)
@@ -245,24 +411,31 @@ interactively, this is the prefix argument."
                  ,temp-file))
     (with-temp-buffer
       (let ((status (apply #'call-process command nil t nil (remq nil args))))
-        (when (zerop status)
-          (mapcar
-           (apply-partially 'replace-regexp-in-string temp-file-re "")
-           (split-string (string-trim (buffer-string)) "\n" t)))))))
+        (if (zerop status)
+            (mapcar
+             (apply-partially #'replace-regexp-in-string temp-file-re "")
+             (split-string (string-trim (buffer-string)) "\n" t))
+          (minibuffer-message (buffer-string))
+          nil)))))
 
 (defun elisp-bundle-extract-undefs ()
-  "Return cons of undefined functions and variables names in current buffer."
+  "Return cons of undefined functions and variables name in current buffer."
   (let ((lines (elisp-bundle-compile-current-buffer))
         (line)
         (vars)
         (fns))
     (while (setq line (pop lines))
-      (cond ((string-match-p "is not known to be defined" line)
-             (when-let ((names (elisp-bundle-extract-quoted-text line)))
-               (setq fns (nconc fns names))))
+      (cond ((or (string-match-p "is not known to be defined" line)
+                 (string-match-p "might not be defined at runtime" line))
+             (when-let ((name (elisp-bundle-extract-quoted-text line))
+                        (n (ignore-errors (string-to-number (car (split-string
+                                                                  line ":" t))))))
+               (setq fns (push (cons name n) fns))))
             ((string-match-p "reference to free variable" line)
-             (when-let ((names (elisp-bundle-extract-quoted-text line)))
-               (setq vars (nconc vars names))))))
+             (when-let ((name (elisp-bundle-extract-quoted-text line))
+                        (n (ignore-errors (string-to-number (car (split-string
+                                                                  line ":" t))))))
+               (setq vars (push (cons name n) vars))))))
     (when (or fns
               vars)
       (cons (seq-uniq fns)
@@ -315,6 +488,136 @@ interactively, this is the prefix argument."
                 "\n"))))
     (insert str)))
 
+(defun elisp-bundle-jump-to-line (line)
+  "Jump to LINE."
+  (goto-char (point-min))
+  (forward-line (1- line)))
+
+(defun elisp-bundle-jump-to-body-start ()
+  "Parse list at point and return alist of form (symbol-name args doc deftype).
+E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
+  (let ((found nil))
+    (when-let ((start (car-safe (nth 9 (syntax-ppss (point))))))
+      (goto-char start)
+      (when-let* ((sexp (sexp-at-point))
+                  (sexp-type (car-safe sexp)))
+        (not (setq found (and (or (eq sexp-type 'defun)
+                                  (eq sexp-type 'cl-defun))
+                              (and (listp sexp)
+                                   (symbolp (nth 1 sexp))
+                                   (listp (nth 2 sexp))))))
+        (when found
+          (down-list)
+          (forward-sexp 3)
+          (skip-chars-forward "\s\t\n")
+          (when (looking-at "\"")
+            (forward-sexp 1)
+            (skip-chars-forward "\s\t\n"))
+          (when (looking-at "[(]interactive[^a-zZ-A]")
+            (forward-sexp 1)
+            (skip-chars-forward "\s\t\n"))
+          (point))))))
+
+(defun elisp-bundle-get-requires-from-sexp (sexp)
+  "Extract list of unquoted features required in SEXP."
+  (let ((requires))
+    (while (and (listp sexp)
+                (setq sexp (memq 'require (flatten-list
+                                           sexp))))
+      (pop sexp)
+      (when (and (eq (car-safe sexp) 'quote)
+                 (symbolp (nth 1 sexp)))
+        (push (nth 1 sexp) requires)))
+    requires))
+
+(defun elisp-bundle-add-fbound (name line)
+  "Search for NAME on the LINE and add to the parent list `fbound' check."
+  (elisp-bundle-jump-to-line line)
+  (when (re-search-forward (regexp-quote name)
+                           (line-end-position) t 1)
+    (when-let* ((start (elisp-bundle-backward-up-list))
+                (end (progn (forward-sexp 1)
+                            (point)))
+                (content (buffer-substring-no-properties
+                          start end)))
+      (when (elisp-bundle-confirm-replace start end
+                                          (format "(when (fboundp '%s\n%s))"
+                                                  name content))
+        (delete-region start end)
+        (insert (format "(when (fboundp '%s))"
+                        name))
+        (forward-char -1)
+        (newline-and-indent)
+        (insert content))
+      (when-let ((lib
+                  (ignore-errors
+                    (with-current-buffer
+                        (car-safe (find-definition-noselect
+                                   (intern
+                                    name)
+                                   nil))
+                      (when (fboundp
+                             'elisp-bundle--provided-feature)
+                        (elisp-bundle--provided-feature))))))
+        (let ((found nil))
+          (when-let ((start (car-safe (nth 9 (syntax-ppss (point))))))
+            (goto-char start)
+            (when-let* ((sexp (sexp-at-point))
+                        (sexp-type (car-safe sexp)))
+              (not (setq found (and (or (eq sexp-type 'defun)
+                                        (eq sexp-type 'cl-defun))
+                                    (and (listp sexp)
+                                         (symbolp (nth 1 sexp))
+                                         (listp (nth 2 sexp))))))
+              (when found
+                (let ((libs (mapcar #'symbol-name
+                                    (elisp-bundle-get-requires-from-sexp
+                                     (sexp-at-point)))))
+                  (unless (member lib libs)
+                    (down-list)
+                    (forward-sexp 3)
+                    (skip-chars-forward "\s\t\n")
+                    (when (looking-at "\"")
+                      (forward-sexp 1)
+                      (skip-chars-forward "\s\t\n"))
+                    (when (looking-at "[(]interactive[^a-zZ-A]")
+                      (forward-sexp 1)
+                      (skip-chars-forward "\s\t\n"))
+                    (when (elisp-bundle-confirm-replace (point)
+                                                        (point)
+                                                        (format
+                                                         "(require '%s)\n" lib))
+                      (insert (format "(require '%s)\n" lib)))))))))))))
+
+(defun elisp-bundle-eval-requires ()
+  "Evaluate all require all statements in current buffer."
+  (let ((requires
+         (let ((requires '())
+               (deps))
+           (save-excursion
+             (goto-char (point-max))
+             (while (elisp-bundle--backward-list)
+               (when-let ((sexp (unless (nth 4 (syntax-ppss (point)))
+                                  (list-at-point))))
+                 (if-let ((dep
+                           (elisp-bundle--format-sexp-to-require
+                            sexp)))
+                     (push dep requires)
+                   (when (listp sexp)
+                     (push sexp deps))))))
+           (when deps
+             (elisp-bundle--with-temp-lisp-buffer
+                 (insert (prin1-to-string deps))
+                 (while (re-search-backward "[(]require[\s\t\n\r\f]+'"
+                                            nil t 1)
+                   (when-let ((found (elisp-bundle--parse-require)))
+                     (unless (member found requires)
+                       (push found requires))))))
+           requires)))
+    (dolist (lib requires)
+      (require (car lib) nil t))))
+
+
 ;;;###autoload
 (defun elisp-bundle-include-undefined ()
   "Insert defintions of unused functions or variables in current buffer.
@@ -324,48 +627,64 @@ Other available strategies - insert declare-functions form or require."
         (searched-names)
         (libs-strategies)
         (names))
+    (elisp-bundle-eval-requires)
     (while (setq names (elisp-bundle-extract-undefs-in-buffer initial-buff
                                                               searched-names))
       (setq searched-names (nconc searched-names names))
-      (let ((name))
-        (while (setq name (pop names))
-          (when-let ((definition
-                      (when-let* ((sym (if (stringp name)
-                                           (intern name)
-                                         name))
-                                  (cell (elisp-bundle-find-definition sym)))
-                        (with-current-buffer (car cell)
-                          (let* ((lib (save-match-data
-                                        (elisp-bundle--provided-feature)))
-                                 (strategy
-                                  (or
-                                   (cdr (assoc lib libs-strategies))
-                                   (let ((char (car
-                                                (read-multiple-choice
-                                                 (format "Strategy for %s " lib)
-                                                 '((?r "require")
-                                                   (?d "declare")
-                                                   (?b "bundle")
-                                                   (?n "nothing"))))))
-                                     (push (cons lib char) libs-strategies)
-                                     char))))
-                            (pcase strategy
-                              (?r (with-current-buffer
-                                      initial-buff
-                                    (goto-char (point-min))
-                                    (unless (elisp-bundle-re-search-forward
-                                             (concat "(require[\s\t\n]+'"
-                                                     lib "[\s\t\n)]")
-                                             nil t 1)
-                                      (concat "(require '" lib ")"))))
-                              (?b (elisp-bundle-copy-sexp (cdr cell)))
-                              (?d (if (or (functionp sym)
-                                          (macrop sym))
-                                      (format "(declare-function %s \"%s\")"
-                                              sym lib)
-                                    (format "(defvar %s)" sym)))))))))
+      (let ((name-cell))
+        (while (setq name-cell (pop names))
+          (let ((name (car name-cell))
+                (line (cdr name-cell)))
             (with-current-buffer initial-buff
-              (elisp-bundle-insert-definition definition))))))))
+              (elisp-bundle-jump-to-line line)
+              (elisp-bundle-overlay-higlight
+               (line-beginning-position)
+               (line-end-position) 'error))
+            (unless (get-buffer-window initial-buff)
+              (pop-to-buffer initial-buff))
+            (when-let ((definition
+                        (when-let* ((sym (if (stringp name)
+                                             (intern name)
+                                           name))
+                                    (cell (elisp-bundle-find-definition sym)))
+                          (with-current-buffer
+                              (car cell)
+                            (let* ((lib (save-match-data
+                                          (elisp-bundle--provided-feature)))
+                                   (strategy
+                                    (or
+                                     (cdr (assoc lib libs-strategies))
+                                     (let ((char (car
+                                                  (read-multiple-choice
+                                                   (format
+                                                    "Strategy for %s (%s) in %s"
+                                                    name lib initial-buff)
+                                                   '((?r "require")
+                                                     (?f "fbound")
+                                                     (?d "declare")
+                                                     (?b "bundle")
+                                                     (?n "nothing"))))))
+                                       (push (cons lib char) libs-strategies)
+                                       char))))
+                              (pcase strategy
+                                (?r (with-current-buffer
+                                        initial-buff
+                                      (goto-char (point-min))
+                                      (unless (elisp-bundle-re-search-forward
+                                               (concat "(require[\s\t\n]+'"
+                                                       lib "[\s\t\n)]")
+                                               nil t 1)
+                                        (concat "(require '" lib ")"))))
+                                (?f (with-current-buffer initial-buff
+                                      (elisp-bundle-add-fbound name line)))
+                                (?b (elisp-bundle-copy-sexp (cdr cell)))
+                                (?d (if (or (functionp sym)
+                                            (macrop sym))
+                                        (format "(declare-function %s \"%s\")"
+                                                sym lib)
+                                      (format "(defvar %s)" sym)))))))))
+              (with-current-buffer initial-buff
+                (elisp-bundle-insert-definition definition)))))))))
 
 (provide 'elisp-bundle)
 ;;; elisp-bundle.el ends here
