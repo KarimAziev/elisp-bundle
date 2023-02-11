@@ -427,14 +427,16 @@ interactively, this is the prefix argument."
     (while (setq line (pop lines))
       (cond ((or (string-match-p "is not known to be defined" line)
                  (string-match-p "might not be defined at runtime" line))
-             (when-let ((name (elisp-bundle-extract-quoted-text line))
-                        (n (ignore-errors (string-to-number (car (split-string
-                                                                  line ":" t))))))
+             (when-let
+                 ((name (elisp-bundle-extract-quoted-text line))
+                  (n (ignore-errors (string-to-number (car (split-string
+                                                            line ":" t))))))
                (setq fns (push (cons name n) fns))))
             ((string-match-p "reference to free variable" line)
              (when-let ((name (elisp-bundle-extract-quoted-text line))
-                        (n (ignore-errors (string-to-number (car (split-string
-                                                                  line ":" t))))))
+                        (n (ignore-errors (string-to-number (car
+                                                             (split-string
+                                                              line ":" t))))))
                (setq vars (push (cons name n) vars))))))
     (when (or fns
               vars)
