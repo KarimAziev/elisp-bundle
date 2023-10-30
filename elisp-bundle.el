@@ -461,6 +461,40 @@ interactively, this is the prefix argument."
      (find-definition-noselect
       symbol 'defvar))))
 
+(defvar-local elisp-bundle-top-level-sexps nil)
+(defvar-local elisp-bundle-top-level-tick nil)
+(defun elisp-bundle-scan-top-level-lists (buffer)
+  "Scan and return top-level s-expressions from a given BUFFER.
+
+Argument BUFFER is a buffer object."
+  (with-current-buffer buffer
+    (let ((tick (buffer-modified-tick)))
+      (if (eq elisp-bundle-top-level-tick tick)
+          elisp-bundle-top-level-sexps
+        (setq elisp-bundle-top-level-tick tick)
+        (let ((sexps)
+              (sexp))
+          (goto-char (point-min))
+          (while (setq sexp (ignore-errors (read (current-buffer))))
+            (push sexp sexps))
+          (setq elisp-bundle-top-level-sexps (nreverse sexps)))))))
+
+(defun elisp-bundle-find-provide-sexp (sexps)
+  "Find and return the symbol provided by the given SEXPS.
+
+Argument SEXPS is a list of S-expressions."
+  (let ((items (reverse sexps))
+        (found))
+    (while (and items (not found))
+      (let ((curr (car items)))
+        (pcase curr
+          (`(provide ',(and sym (guard (symbolp sym))))
+           (setq found curr))
+          (`(provide ',(and sym (guard (symbolp sym))) . _)
+           (setq found curr))))
+      (setq items (cdr items)))
+    (cadadr found)))
+
 (defun elisp-bundle--provided-feature ()
   "Return the last-provided feature name, as a string, or nil if none."
   (goto-char (point-max))
@@ -515,7 +549,7 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
           (when (looking-at "\"")
             (forward-sexp 1)
             (skip-chars-forward "\s\t\n"))
-          (when (looking-at "[(]interactive[^a-zZ-A]")
+          (when (looking-at "[(]interactive[^a-z]")
             (forward-sexp 1)
             (skip-chars-forward "\s\t\n"))
           (point))))))
@@ -558,9 +592,7 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
                                    (intern
                                     name)
                                    nil))
-                      (when (fboundp
-                             'elisp-bundle--provided-feature)
-                        (elisp-bundle--provided-feature))))))
+                      (elisp-bundle--provided-feature)))))
         (let ((found nil))
           (when-let ((start (car-safe (nth 9 (syntax-ppss (point))))))
             (goto-char start)
@@ -582,7 +614,7 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
                     (when (looking-at "\"")
                       (forward-sexp 1)
                       (skip-chars-forward "\s\t\n"))
-                    (when (looking-at "[(]interactive[^a-zZ-A]")
+                    (when (looking-at "[(]interactive[^a-z]")
                       (forward-sexp 1)
                       (skip-chars-forward "\s\t\n"))
                     (when (elisp-bundle-confirm-replace (point)
@@ -645,46 +677,53 @@ Other available strategies - insert declare-functions form or require."
             (unless (get-buffer-window initial-buff)
               (pop-to-buffer initial-buff))
             (when-let ((definition
-                        (when-let* ((sym (if (stringp name)
-                                             (intern name)
-                                           name))
-                                    (cell (elisp-bundle-find-definition sym)))
-                          (with-current-buffer
-                              (car cell)
-                            (let* ((lib (save-match-data
-                                          (elisp-bundle--provided-feature)))
-                                   (strategy
-                                    (or
-                                     (cdr (assoc lib libs-strategies))
-                                     (let ((char (car
-                                                  (read-multiple-choice
-                                                   (format
-                                                    "Strategy for %s (%s) in %s"
-                                                    name lib initial-buff)
-                                                   '((?r "require")
-                                                     (?f "fbound")
-                                                     (?d "declare")
-                                                     (?b "bundle")
-                                                     (?n "nothing"))))))
-                                       (push (cons lib char) libs-strategies)
-                                       char))))
-                              (pcase strategy
-                                (?r (with-current-buffer
-                                        initial-buff
-                                      (goto-char (point-min))
-                                      (unless (elisp-bundle-re-search-forward
-                                               (concat "(require[\s\t\n]+'"
-                                                       lib "[\s\t\n)]")
-                                               nil t 1)
-                                        (concat "(require '" lib ")"))))
-                                (?f (with-current-buffer initial-buff
-                                      (elisp-bundle-add-fbound name line)))
-                                (?b (elisp-bundle-copy-sexp (cdr cell)))
-                                (?d (if (or (functionp sym)
-                                            (macrop sym))
-                                        (format "(declare-function %s \"%s\")"
-                                                sym lib)
-                                      (format "(defvar %s)" sym)))))))))
+                        (pcase-let* ((sym (if (stringp name)
+                                              (intern name)
+                                            name))
+                                     (`(,lib-buff . ,position)
+                                      (and sym
+                                           (elisp-bundle-find-definition sym)))
+                                     (sexps (and (buffer-live-p lib-buff)
+                                                 (elisp-bundle-scan-top-level-lists
+                                                  lib-buff)))
+                                     (lib-sym (elisp-bundle-find-provide-sexp
+                                               sexps))
+                                     (lib (and lib-sym (symbol-name lib-sym)))
+                                     (strategy
+                                      (and lib
+                                           (or
+                                            (cdr (assoc lib libs-strategies))
+                                            (let ((char (car
+                                                         (read-multiple-choice
+                                                          (format
+                                                           "Strategy for %s (%s) in %s"
+                                                           name lib initial-buff)
+                                                          '((?r "require")
+                                                            (?f "fbound")
+                                                            (?d "declare")
+                                                            (?b "bundle")
+                                                            (?n "nothing"))))))
+                                              (push (cons lib char)
+                                                    libs-strategies)
+                                              char)))))
+                          (pcase strategy
+                            (?r (with-current-buffer
+                                    initial-buff
+                                  (goto-char (point-min))
+                                  (unless (elisp-bundle-re-search-forward
+                                           (concat "(require[\s\t\n]+'"
+                                                   lib "[\s\t\n)]")
+                                           nil t 1)
+                                    (concat "(require '" lib ")"))))
+                            (?f (with-current-buffer initial-buff
+                                  (elisp-bundle-add-fbound name line)))
+                            (?b (with-current-buffer lib-buff
+                                  (elisp-bundle-copy-sexp position)))
+                            (?d (if (or (functionp sym)
+                                        (macrop sym))
+                                    (format "(declare-function %s \"%s\")"
+                                            sym lib)
+                                  (format "(defvar %s)" sym)))))))
               (with-current-buffer initial-buff
                 (elisp-bundle-insert-definition definition)))))))))
 
