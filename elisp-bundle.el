@@ -280,13 +280,15 @@ Return new position if changed, nil otherwise."
   (elisp-bundle-move-with 'forward-sexp arg))
 
 (defun elisp-bundle-backward-list (&optional n)
-  "Move backward across N balanced group of parentheses.
-Return new position if changed, nil otherwise."
+  "Move backward over a list N times.
+
+Optional argument N is the number of lists to move backward; it defaults to 1."
   (elisp-bundle-move-with 'backward-list n))
 
 (defun elisp-bundle-backward-up-list (&optional n)
-  "Move backward across N balanced group of parentheses.
-Return new position if changed, nil otherwise."
+  "Move backward out of one level of parentheses.
+
+Optional argument N is the number of levels to go up; it defaults to 1."
   (elisp-bundle-move-with 'backward-up-list n))
 
 (defun elisp-bundle-re-search-backward (regexp &optional bound noerror count)
