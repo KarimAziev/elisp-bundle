@@ -420,31 +420,6 @@ interactively, this is the prefix argument."
           (minibuffer-message (buffer-string))
           nil)))))
 
-(defun elisp-bundle-extract-undefs ()
-  "Return cons of undefined functions and variables name in current buffer."
-  (let ((lines (elisp-bundle-compile-current-buffer))
-        (line)
-        (vars)
-        (fns))
-    (while (setq line (pop lines))
-      (cond ((or (string-match-p "is not known to be defined" line)
-                 (string-match-p "might not be defined at runtime" line))
-             (when-let
-                 ((name (elisp-bundle-extract-quoted-text line))
-                  (n (ignore-errors (string-to-number (car (split-string
-                                                            line ":" t))))))
-               (setq fns (push (cons name n) fns))))
-            ((string-match-p "reference to free variable" line)
-             (when-let ((name (elisp-bundle-extract-quoted-text line))
-                        (n (ignore-errors (string-to-number (car
-                                                             (split-string
-                                                              line ":" t))))))
-               (setq vars (push (cons name n) vars))))))
-    (when (or fns
-              vars)
-      (cons (seq-uniq fns)
-            (seq-uniq vars)))))
-
 (defun elisp-bundle-copy-sexp (position)
   "Copy SEXP at POSITION."
   (goto-char position)
@@ -505,13 +480,42 @@ Argument SEXPS is a list of S-expressions."
          nil t 1)
     (match-string-no-properties 1)))
 
+(defun elisp-bundle-extract-undefs ()
+  "Return cons of undefined functions and variables name in current buffer."
+  (let ((lines (elisp-bundle-compile-current-buffer))
+        (line)
+        (vars)
+        (fns))
+    (while (setq line (pop lines))
+      (cond ((or (string-match-p "is not known to be defined" line)
+                 (string-match-p "might not be defined at runtime" line))
+             (when-let
+                 ((name (elisp-bundle-extract-quoted-text line))
+                  (n (ignore-errors (string-to-number (car (split-string
+                                                            line ":" t))))))
+               (setq fns (push (cons name n) fns))))
+            ((string-match-p "reference to free variable" line)
+             (when-let ((name (elisp-bundle-extract-quoted-text line))
+                        (n (ignore-errors (string-to-number (car
+                                                             (split-string
+                                                              line ":" t))))))
+               (setq vars (push (cons name n) vars))))))
+    (when (or fns
+              vars)
+      (delq nil
+            (append vars fns)))))
+
 (defun elisp-bundle-extract-undefs-in-buffer (buffer searched-names)
   "Return undefined definitions in BUFFER, exluding SEARCHED-NAMES."
   (let ((undefs (with-current-buffer buffer
-                  (elisp-bundle-extract-undefs))))
-    (or
-     (seq-difference (car undefs) searched-names)
-     (seq-difference (cdr undefs) searched-names))))
+                  (elisp-bundle-extract-undefs)))
+        (searched-strs (mapcar #'car searched-names)))
+    (seq-uniq (seq-remove (pcase-lambda (`(,k . ,_v))
+                            (member k searched-strs))
+                          undefs)
+              (lambda (a b)
+                (string= (car a)
+                         (car b))))))
 
 (defun elisp-bundle-insert-definition (definition)
   "Insert DEFINITION name in current buffer."
