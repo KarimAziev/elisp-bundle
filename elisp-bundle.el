@@ -1,4 +1,4 @@
-;;; elisp-bundle.el --- Auto-declarations, requires or definitions -*- lexical-binding: t -*-
+;;; elisp-bundle.el --- Managing undefined symbols in Emacs Lisp -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2022 Karim Aziiev <karim.aziiev@gmail.com>
 
@@ -25,7 +25,10 @@
 
 ;;; Commentary:
 
-;; This file configures operations with bundle
+;; This package provides functionality to automatically declare, require, or
+;; define undefined functions or variables in Emacs Lisp code. It includes
+;; commands to highlight and insert missing definitions, and strategies for
+;; handling undefined symbols.
 
 ;; Commands
 
