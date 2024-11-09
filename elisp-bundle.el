@@ -104,7 +104,7 @@ PROPS is a plist to put on overlay."
 
 (defun elisp-bundle-overlay-add-hooks (ov)
   "Add cleanup hooks to overlay OV."
-  (when-let ((buff (when (overlayp ov)
+  (when-let* ((buff (when (overlayp ov)
                      (overlay-buffer ov))))
     (when (buffer-live-p buff)
       (with-current-buffer (overlay-buffer ov)
@@ -136,7 +136,7 @@ Default value of TIMEOUT is 0 seconds."
 (defun elisp-bundle--parse-require ()
   "Parse list at point and return alist of form (symbol-name args doc deftype).
 E.g. (\"elisp-bundle--parse-list-at-point\" (arg) \"Doc string\" defun)"
-  (when-let ((sexp (unless (or (nth 4 (syntax-ppss (point)))
+  (when-let* ((sexp (unless (or (nth 4 (syntax-ppss (point)))
                                (nth 3 (syntax-ppss (point))))
                      (sexp-at-point))))
     (when (listp sexp)
@@ -202,14 +202,14 @@ Return new position if changed, nil otherwise."
   "Move by calling FN N times.
 Return new position if changed, nil otherwise."
   (unless n (setq n 1))
-  (when-let ((str-start (nth 8 (syntax-ppss (point)))))
+  (when-let* ((str-start (nth 8 (syntax-ppss (point)))))
     (goto-char str-start))
   (let ((init-pos (point))
         (pos)
         (count (if (> n 0) n (- n))))
     (while
         (and (not (= count 0))
-             (when-let ((end (ignore-errors
+             (when-let* ((end (ignore-errors
                                (funcall fn (if
                                                (> n 0) 1
                                              -1))
@@ -320,7 +320,7 @@ Arguments BOUND, NOERROR, COUNT has the same meaning as `re-search-forward'."
 
 (defun elisp-bundle-sexp-to-skip ()
   "Return non nil if sexp should be skipped."
-  (when-let ((sexp (sexp-at-point)))
+  (when-let* ((sexp (sexp-at-point)))
     (and
      (listp sexp)
      (memq (car sexp)
@@ -426,7 +426,7 @@ interactively, this is the prefix argument."
 (defun elisp-bundle-copy-sexp (position)
   "Copy SEXP at POSITION."
   (goto-char position)
-  (when-let ((bounds (bounds-of-thing-at-point
+  (when-let* ((bounds (bounds-of-thing-at-point
                       'sexp)))
     (buffer-substring-no-properties
      (car bounds)
@@ -492,13 +492,13 @@ Argument SEXPS is a list of S-expressions."
     (while (setq line (pop lines))
       (cond ((or (string-match-p "is not known to be defined" line)
                  (string-match-p "might not be defined at runtime" line))
-             (when-let
+             (when-let*
                  ((name (elisp-bundle-extract-quoted-text line))
                   (n (ignore-errors (string-to-number (car (split-string
                                                             line ":" t))))))
                (setq fns (push (cons name n) fns))))
             ((string-match-p "reference to free variable" line)
-             (when-let ((name (elisp-bundle-extract-quoted-text line))
+             (when-let* ((name (elisp-bundle-extract-quoted-text line))
                         (n (ignore-errors (string-to-number (car
                                                              (split-string
                                                               line ":" t))))))
@@ -542,7 +542,7 @@ Argument SEXPS is a list of S-expressions."
   "Parse list at point and return alist of form (symbol-name args doc deftype).
 E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
   (let ((found nil))
-    (when-let ((start (car-safe (nth 9 (syntax-ppss (point))))))
+    (when-let* ((start (car-safe (nth 9 (syntax-ppss (point))))))
       (goto-char start)
       (when-let* ((sexp (sexp-at-point))
                   (sexp-type (car-safe sexp)))
@@ -594,7 +594,7 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
         (forward-char -1)
         (newline-and-indent)
         (insert content))
-      (when-let ((lib
+      (when-let* ((lib
                   (ignore-errors
                     (with-current-buffer
                         (car-safe (find-definition-noselect
@@ -603,7 +603,7 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
                                    nil))
                       (elisp-bundle--provided-feature)))))
         (let ((found nil))
-          (when-let ((start (car-safe (nth 9 (syntax-ppss (point))))))
+          (when-let* ((start (car-safe (nth 9 (syntax-ppss (point))))))
             (goto-char start)
             (when-let* ((sexp (sexp-at-point))
                         (sexp-type (car-safe sexp)))
@@ -640,9 +640,9 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
            (save-excursion
              (goto-char (point-max))
              (while (elisp-bundle--backward-list)
-               (when-let ((sexp (unless (nth 4 (syntax-ppss (point)))
+               (when-let* ((sexp (unless (nth 4 (syntax-ppss (point)))
                                   (list-at-point))))
-                 (if-let ((dep
+                 (if-let* ((dep
                            (elisp-bundle--format-sexp-to-require
                             sexp)))
                      (push dep requires)
@@ -653,7 +653,7 @@ E.g. (\"autofix-parse-list-at-point\" (arg) \"Doc string\" defun)"
                  (insert (prin1-to-string deps))
                  (while (re-search-backward "[(]require[\s\t\n\r\f]+'"
                                             nil t 1)
-                   (when-let ((found (elisp-bundle--parse-require)))
+                   (when-let* ((found (elisp-bundle--parse-require)))
                      (unless (member found requires)
                        (push found requires))))))
            requires)))
@@ -685,7 +685,7 @@ Other available strategies - insert declare-functions form or require."
                (line-end-position) 'error))
             (unless (get-buffer-window initial-buff)
               (pop-to-buffer initial-buff))
-            (when-let ((definition
+            (when-let* ((definition
                         (pcase-let* ((sym (if (stringp name)
                                               (intern name)
                                             name))
